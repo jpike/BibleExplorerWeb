@@ -1,0 +1,4 @@
+data/*
+**/*.xml
+*.xml
+kjv.xml

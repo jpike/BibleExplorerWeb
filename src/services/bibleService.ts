@@ -1,3 +1,4 @@
+import { XMLParser } from 'fast-xml-parser';
 import type { BibleReference, Verse, Chapter } from '../types/bible';
 import { bibleBooks } from '../data/books';
 
@@ -8,71 +9,189 @@ interface BibleTextProvider {
   getVerseRange: (start: BibleReference, end: BibleReference) => Promise<Verse[]>;
 }
 
-// Local KJV provider
-class KJVProvider implements BibleTextProvider {
-  private async loadBookData(book: string) {
-    try {
-      // Dynamic import of book data
-      const module = await import(`../data/kjv/${book.toLowerCase()}.ts`);
-      return module.default;
-    } catch (error) {
-      console.error(`Failed to load book data for ${book}:`, error);
-      throw new Error(`Book data not available for ${book}`);
-    }
+// OSIS XML provider for KJV
+class OSISProvider implements BibleTextProvider {
+  private xmlData: any = null;
+  private parser: XMLParser;
+  private initialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
+
+  constructor() {
+    this.parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '',
+      textNodeName: '_text',
+      isArray: (name) => ['div', 'chapter', 'verse'].includes(name),
+    });
   }
 
-  private isValidReference(reference: BibleReference): boolean {
-    const book = bibleBooks.find(b => b.name === reference.book);
-    if (!book) return false;
+  private async initialize() {
+    if (this.initialized) return;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = (async () => {
+      try {
+        const response = await fetch('/data/kjv.xml');
+        const xmlText = await response.text();
+        this.xmlData = this.parser.parse(xmlText);
+        this.initialized = true;
+      } catch (error) {
+        console.error('Failed to load Bible data:', error);
+        throw new Error('Failed to load Bible data');
+      }
+    })();
+
+    return this.initPromise;
+  }
+
+  private getBookAbbreviation(bookName: string): string {
+    // Convert full book names to OSIS abbreviations
+    const abbreviations: Record<string, string> = {
+      // Old Testament
+      'Genesis': 'Gen',
+      'Exodus': 'Exod',
+      'Leviticus': 'Lev',
+      'Numbers': 'Num',
+      'Deuteronomy': 'Deut',
+      'Joshua': 'Josh',
+      'Judges': 'Judg',
+      'Ruth': 'Ruth',
+      '1 Samuel': '1Sam',
+      '2 Samuel': '2Sam',
+      '1 Kings': '1Kgs',
+      '2 Kings': '2Kgs',
+      '1 Chronicles': '1Chr',
+      '2 Chronicles': '2Chr',
+      'Ezra': 'Ezra',
+      'Nehemiah': 'Neh',
+      'Esther': 'Esth',
+      'Job': 'Job',
+      'Psalms': 'Ps',
+      'Proverbs': 'Prov',
+      'Ecclesiastes': 'Eccl',
+      'Song of Solomon': 'Song',
+      'Isaiah': 'Isa',
+      'Jeremiah': 'Jer',
+      'Lamentations': 'Lam',
+      'Ezekiel': 'Ezek',
+      'Daniel': 'Dan',
+      'Hosea': 'Hos',
+      'Joel': 'Joel',
+      'Amos': 'Amos',
+      'Obadiah': 'Obad',
+      'Jonah': 'Jonah',
+      'Micah': 'Mic',
+      'Nahum': 'Nah',
+      'Habakkuk': 'Hab',
+      'Zephaniah': 'Zeph',
+      'Haggai': 'Hag',
+      'Zechariah': 'Zech',
+      'Malachi': 'Mal',
+      
+      // New Testament
+      'Matthew': 'Matt',
+      'Mark': 'Mark',
+      'Luke': 'Luke',
+      'John': 'John',
+      'Acts': 'Acts',
+      'Romans': 'Rom',
+      '1 Corinthians': '1Cor',
+      '2 Corinthians': '2Cor',
+      'Galatians': 'Gal',
+      'Ephesians': 'Eph',
+      'Philippians': 'Phil',
+      'Colossians': 'Col',
+      '1 Thessalonians': '1Thess',
+      '2 Thessalonians': '2Thess',
+      '1 Timothy': '1Tim',
+      '2 Timothy': '2Tim',
+      'Titus': 'Titus',
+      'Philemon': 'Phlm',
+      'Hebrews': 'Heb',
+      'James': 'Jas',
+      '1 Peter': '1Pet',
+      '2 Peter': '2Pet',
+      '1 John': '1John',
+      '2 John': '2John',
+      '3 John': '3John',
+      'Jude': 'Jude',
+      'Revelation': 'Rev'
+    };
+    return abbreviations[bookName] || bookName;
+  }
+
+  private findVerseInXML(reference: BibleReference) {
+    const bookAbbr = this.getBookAbbreviation(reference.book);
+    const osisID = `${bookAbbr}.${reference.chapter}.${reference.verse}`;
     
-    if (reference.chapter < 1 || reference.chapter > book.chapters) return false;
+    const book = this.xmlData.osis.osisText.div.find(
+      (div: any) => div.osisID === bookAbbr
+    );
     
-    // Verse validation would require knowing the number of verses in each chapter
-    // For now, we'll just ensure it's a positive number if provided
-    if (reference.verse !== undefined && reference.verse < 1) return false;
+    if (!book) return null;
+
+    const chapter = book.chapter.find(
+      (ch: any) => ch.osisID === `${bookAbbr}.${reference.chapter}`
+    );
     
-    return true;
+    if (!chapter) return null;
+
+    const verse = chapter.verse.find(
+      (v: any) => v.osisID === osisID
+    );
+    
+    return verse;
+  }
+
+  private findChapterInXML(reference: BibleReference) {
+    const bookAbbr = this.getBookAbbreviation(reference.book);
+    const book = this.xmlData.osis.osisText.div.find(
+      (div: any) => div.osisID === bookAbbr
+    );
+    
+    if (!book) return null;
+
+    const chapter = book.chapter.find(
+      (ch: any) => ch.osisID === `${bookAbbr}.${reference.chapter}`
+    );
+    
+    return chapter;
   }
 
   async getVerse(reference: BibleReference): Promise<Verse> {
-    if (!this.isValidReference(reference)) {
-      throw new Error(`Invalid reference: ${reference.book} ${reference.chapter}:${reference.verse}`);
-    }
+    await this.initialize();
 
-    const bookData = await this.loadBookData(reference.book);
-    const verse = bookData[reference.chapter]?.[reference.verse];
-    
+    const verse = this.findVerseInXML(reference);
     if (!verse) {
       throw new Error(`Verse not found: ${reference.book} ${reference.chapter}:${reference.verse}`);
     }
 
     return {
       reference: { ...reference, translation: 'KJV' },
-      text: verse
+      text: verse._text
     };
   }
 
   async getChapter(reference: BibleReference): Promise<Chapter> {
-    if (!this.isValidReference(reference)) {
-      throw new Error(`Invalid reference: ${reference.book} ${reference.chapter}`);
-    }
+    await this.initialize();
 
-    const bookData = await this.loadBookData(reference.book);
-    const chapterData = bookData[reference.chapter];
-    
-    if (!chapterData) {
+    const chapter = this.findChapterInXML(reference);
+    if (!chapter) {
       throw new Error(`Chapter not found: ${reference.book} ${reference.chapter}`);
     }
 
-    const verses = Object.entries(chapterData).map(([verseNum, text]) => ({
-      reference: {
-        book: reference.book,
-        chapter: reference.chapter,
-        verse: parseInt(verseNum, 10),
-        translation: 'KJV'
-      },
-      text: text as string
-    }));
+    const verses = chapter.verse.map((v: any) => {
+      const [book, chapter, verse] = v.osisID.split('.');
+      return {
+        reference: {
+          book: reference.book,
+          chapter: parseInt(chapter),
+          verse: parseInt(verse),
+          translation: 'KJV'
+        },
+        text: v._text
+      };
+    });
 
     return {
       reference: { ...reference, translation: 'KJV' },
@@ -81,36 +200,36 @@ class KJVProvider implements BibleTextProvider {
   }
 
   async getVerseRange(start: BibleReference, end: BibleReference): Promise<Verse[]> {
-    if (!this.isValidReference(start) || !this.isValidReference(end)) {
-      throw new Error('Invalid verse range reference');
-    }
+    await this.initialize();
 
     if (start.book !== end.book) {
       throw new Error('Verse range must be within the same book');
     }
 
-    const bookData = await this.loadBookData(start.book);
     const verses: Verse[] = [];
+    const chapter = this.findChapterInXML(start);
+    
+    if (!chapter) {
+      throw new Error(`Chapter not found: ${start.book} ${start.chapter}`);
+    }
 
-    for (let chapter = start.chapter; chapter <= end.chapter; chapter++) {
-      const chapterData = bookData[chapter];
-      if (!chapterData) continue;
+    const startVerse = start.verse || 1;
+    const endVerse = end.verse || chapter.verse.length;
 
-      const startVerse = chapter === start.chapter ? start.verse || 1 : 1;
-      const endVerse = chapter === end.chapter ? end.verse || Object.keys(chapterData).length : Object.keys(chapterData).length;
-
-      for (let verse = startVerse; verse <= endVerse; verse++) {
-        if (chapterData[verse]) {
-          verses.push({
-            reference: {
-              book: start.book,
-              chapter,
-              verse,
-              translation: 'KJV'
-            },
-            text: chapterData[verse]
-          });
-        }
+    for (const verse of chapter.verse) {
+      const [, , verseNum] = verse.osisID.split('.');
+      const verseNumber = parseInt(verseNum);
+      
+      if (verseNumber >= startVerse && verseNumber <= endVerse) {
+        verses.push({
+          reference: {
+            book: start.book,
+            chapter: start.chapter,
+            verse: verseNumber,
+            translation: 'KJV'
+          },
+          text: verse._text
+        });
       }
     }
 
@@ -118,7 +237,7 @@ class KJVProvider implements BibleTextProvider {
   }
 }
 
-// API.Bible provider
+// API.Bible provider (stubbed)
 class APIBibleProvider implements BibleTextProvider {
   private apiKey: string;
   private baseUrl = 'https://api.scripture.api.bible/v1';
@@ -142,19 +261,14 @@ class APIBibleProvider implements BibleTextProvider {
   }
 
   async getVerse(reference: BibleReference): Promise<Verse> {
-    // TODO: Implement API.Bible verse lookup
-    // Example endpoint: /bibles/{bibleId}/verses/{verseId}
     throw new Error('Not implemented');
   }
 
   async getChapter(reference: BibleReference): Promise<Chapter> {
-    // TODO: Implement API.Bible chapter lookup
-    // Example endpoint: /bibles/{bibleId}/chapters/{chapterId}
     throw new Error('Not implemented');
   }
 
   async getVerseRange(start: BibleReference, end: BibleReference): Promise<Verse[]> {
-    // TODO: Implement API.Bible verse range lookup
     throw new Error('Not implemented');
   }
 }
@@ -180,5 +294,5 @@ export class BibleService {
   }
 }
 
-// Create and export default instance with KJV provider
-export const bibleService = new BibleService(new KJVProvider());
+// Create and export default instance with OSIS XML provider
+export const bibleService = new BibleService(new OSISProvider());
