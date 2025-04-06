@@ -5,7 +5,7 @@ import { bibleBooks } from '../data/books';
 import clsx from 'clsx';
 
 export function Sidebar() {
-  const { currentReference, setCurrentReference } = useBibleStore();
+  const { currentReference, setCurrentReference, currentTranslation } = useBibleStore();
   const [expandedBook, setExpandedBook] = useState<string | null>(currentReference.book);
 
   const oldTestament = bibleBooks.filter(book => book.testament === 'old');
@@ -15,8 +15,7 @@ export function Sidebar() {
     setCurrentReference({ 
       book, 
       chapter, 
-      verse: undefined, // Reset verse when changing chapters
-      translation: 'KJV' 
+      verse: undefined,
     });
   };
 

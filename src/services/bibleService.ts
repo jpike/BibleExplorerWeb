@@ -9,12 +9,17 @@ interface BibleTextProvider {
   getVerseRange: (start: BibleReference, end: BibleReference) => Promise<Verse[]>;
 }
 
-// OSIS XML provider for KJV
+// OSIS XML provider for Bible translations
 class OSISProvider implements BibleTextProvider {
-  private xmlData: any = null;
+  private xmlData: Record<string, any> = {};
   private parser: XMLParser;
-  private initialized: boolean = false;
-  private initPromise: Promise<void> | null = null;
+  private initialized: Record<string, boolean> = {};
+  private initPromises: Record<string, Promise<void>> = {};
+  private translationPaths: Record<string, string> = {
+    'KJV': '/data/kjv.xml',
+    'WEB': '/data/web.xml',
+    'YLT': '/data/ylt.xml'
+  };
 
   constructor() {
     this.parser = new XMLParser({
@@ -25,27 +30,31 @@ class OSISProvider implements BibleTextProvider {
     });
   }
 
-  private async initialize() {
-    if (this.initialized) return;
-    if (this.initPromise) return this.initPromise;
+  private async initialize(translation: string) {
+    if (this.initialized[translation]) return;
+    if (this.initPromises[translation]) return this.initPromises[translation];
 
-    this.initPromise = (async () => {
+    const path = this.translationPaths[translation];
+    if (!path) {
+      throw new Error(`Translation ${translation} not supported`);
+    }
+
+    this.initPromises[translation] = (async () => {
       try {
-        const response = await fetch('/data/kjv.xml');
+        const response = await fetch(path);
         const xmlText = await response.text();
-        this.xmlData = this.parser.parse(xmlText);
-        this.initialized = true;
+        this.xmlData[translation] = this.parser.parse(xmlText);
+        this.initialized[translation] = true;
       } catch (error) {
-        console.error('Failed to load Bible data:', error);
-        throw new Error('Failed to load Bible data');
+        console.error(`Failed to load Bible data for ${translation}:`, error);
+        throw new Error(`Failed to load Bible data for ${translation}`);
       }
     })();
 
-    return this.initPromise;
+    return this.initPromises[translation];
   }
 
   private getBookAbbreviation(bookName: string): string {
-    // Convert full book names to OSIS abbreviations
     const abbreviations: Record<string, string> = {
       // Old Testament
       'Genesis': 'Gen',
@@ -121,10 +130,14 @@ class OSISProvider implements BibleTextProvider {
   }
 
   private findVerseInXML(reference: BibleReference) {
+    if (!reference.translation) {
+      throw new Error('Translation must be specified');
+    }
+
     const bookAbbr = this.getBookAbbreviation(reference.book);
     const osisID = `${bookAbbr}.${reference.chapter}.${reference.verse}`;
     
-    const book = this.xmlData.osis.osisText.div.find(
+    const book = this.xmlData[reference.translation].osis.osisText.div.find(
       (div: any) => div.osisID === bookAbbr
     );
     
@@ -144,8 +157,12 @@ class OSISProvider implements BibleTextProvider {
   }
 
   private findChapterInXML(reference: BibleReference) {
+    if (!reference.translation) {
+      throw new Error('Translation must be specified');
+    }
+
     const bookAbbr = this.getBookAbbreviation(reference.book);
-    const book = this.xmlData.osis.osisText.div.find(
+    const book = this.xmlData[reference.translation].osis.osisText.div.find(
       (div: any) => div.osisID === bookAbbr
     );
     
@@ -159,7 +176,11 @@ class OSISProvider implements BibleTextProvider {
   }
 
   async getVerse(reference: BibleReference): Promise<Verse> {
-    await this.initialize();
+    if (!reference.translation) {
+      throw new Error('Translation must be specified');
+    }
+
+    await this.initialize(reference.translation);
 
     const verse = this.findVerseInXML(reference);
     if (!verse) {
@@ -167,13 +188,17 @@ class OSISProvider implements BibleTextProvider {
     }
 
     return {
-      reference: { ...reference, translation: 'KJV' },
+      reference,
       text: verse._text
     };
   }
 
   async getChapter(reference: BibleReference): Promise<Chapter> {
-    await this.initialize();
+    if (!reference.translation) {
+      throw new Error('Translation must be specified');
+    }
+
+    await this.initialize(reference.translation);
 
     const chapter = this.findChapterInXML(reference);
     if (!chapter) {
@@ -187,20 +212,28 @@ class OSISProvider implements BibleTextProvider {
           book: reference.book,
           chapter: parseInt(chapter),
           verse: parseInt(verse),
-          translation: 'KJV'
+          translation: reference.translation
         },
         text: v._text
       };
     });
 
     return {
-      reference: { ...reference, translation: 'KJV' },
+      reference,
       verses
     };
   }
 
   async getVerseRange(start: BibleReference, end: BibleReference): Promise<Verse[]> {
-    await this.initialize();
+    if (!start.translation || !end.translation) {
+      throw new Error('Translation must be specified');
+    }
+
+    if (start.translation !== end.translation) {
+      throw new Error('Start and end references must use the same translation');
+    }
+
+    await this.initialize(start.translation);
 
     if (start.book !== end.book) {
       throw new Error('Verse range must be within the same book');
@@ -226,7 +259,7 @@ class OSISProvider implements BibleTextProvider {
             book: start.book,
             chapter: start.chapter,
             verse: verseNumber,
-            translation: 'KJV'
+            translation: start.translation
           },
           text: verse._text
         });
@@ -234,6 +267,10 @@ class OSISProvider implements BibleTextProvider {
     }
 
     return verses;
+  }
+
+  getAvailableTranslations(): string[] {
+    return Object.keys(this.translationPaths);
   }
 }
 
@@ -291,6 +328,10 @@ export class BibleService {
 
   async getVerseRange(start: BibleReference, end: BibleReference): Promise<Verse[]> {
     return this.provider.getVerseRange(start, end);
+  }
+
+  getAvailableTranslations(): string[] {
+    return (this.provider as OSISProvider).getAvailableTranslations?.() || [];
   }
 }
 
